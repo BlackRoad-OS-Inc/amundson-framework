@@ -1,0 +1,84 @@
+# BlackRoad OS — Audio Driver
+# TONOR TC-777 USB Microphone (on Aria)
+# Speech-to-text via Whisper on Hailo-8
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module drivers.audio
+
+import drivers.can
+
+# ── Audio Device ──
+
+type AudioDevice:
+    let name: string         # "TONOR TC-777"
+    let device_path: string  # "/dev/snd/pcmC1D0c" or ALSA name
+    let sample_rate: int     # 44100 or 16000 for speech
+    let channels: int        # 1 = mono
+    let bits: int            # 16
+    let state: int           # trit: -1 error, 0 idle, +1 recording
+    let node: string         # which Pi it's on
+
+type AudioBuffer:
+    let samples: list
+    let duration_ms: int
+    let sample_rate: int
+
+# ── Initialize (on Aria) ──
+
+fun init() -> AudioDevice:
+    return AudioDevice:
+        name: "TONOR TC-777"
+        device_path: "hw:1,0"
+        sample_rate: 16000    # 16kHz for speech recognition
+        channels: 1
+        bits: 16
+        state: 0              # idle
+        node: "Aria"
+
+# ── Record ──
+
+fun record(dev: AudioDevice, duration_ms: int) -> AudioBuffer:
+    if dev.state == -1:
+        sys_write("Audio: device error")
+        return AudioBuffer: samples: [], duration_ms: 0, sample_rate: 0
+
+    dev.state = 1  # recording
+    sys_write("Audio: recording {duration_ms}ms from {dev.name} on {dev.node}")
+
+    # In real implementation: arecord -D {dev.device_path} -f S16_LE -r {dev.sample_rate} -c {dev.channels} -d {duration_ms/1000}
+
+    dev.state = 0  # back to idle
+
+    return AudioBuffer:
+        samples: []
+        duration_ms: duration_ms
+        sample_rate: dev.sample_rate
+
+# ── Send Audio to Hailo for Whisper ──
+
+fun transcribe(audio: AudioBuffer, fleet_can: CANBus) -> string:
+    # Route to Cecilia (has Hailo-8 + Whisper HEF)
+    sys_write("Audio: sending {audio.duration_ms}ms to Cecilia for Whisper transcription")
+
+    # Send inference request via CAN
+    can.send_inference_request(fleet_can, can.CAN_ID_ARIA, "whisper", audio.duration_ms)
+
+    # In real implementation: scp audio to Cecilia, run hailortcli with whisper.hef
+    return ""
+
+# ── Voice Command Detection ──
+
+fun detect_wake_word(audio: AudioBuffer) -> bool:
+    # Listen for "Hey Road" or "BlackRoad"
+    # In real implementation: local keyword spotting model
+    return false
+
+# ── Stats ──
+
+fun stats(dev: AudioDevice) -> string:
+    let state_str: string = "idle"
+    if dev.state == 1:
+        state_str = "recording"
+    elif dev.state == -1:
+        state_str = "error"
+    return "Audio: {dev.name} on {dev.node} ({state_str}, {dev.sample_rate}Hz)"

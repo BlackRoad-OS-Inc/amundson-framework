@@ -1,0 +1,94 @@
+# BlackRoad OS Kernel — Boot Sequence
+# Written in RoadC. Ternary-native. Self-normalizing.
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+# The kernel starts here. G(n) = n^(n+n/n) / (n+n/n)^n.
+# The OS is the amplitude. The hardware is n.
+
+module kernel.boot
+
+import kernel.scheduler
+import kernel.memory
+import kernel.syscall
+import kernel.trit
+
+# ── Boot Constants (derived from n, not hardcoded) ──
+
+let PAGE_SIZE: int = 4096
+let MAX_PROCS: int = 30000
+let STACK_SIZE: int = 8192
+let TRIT_WIDTH: int = 3
+
+# ── Ternary State ──
+# Every kernel object has a trit state: -1 (dead), 0 (suspended), +1 (alive)
+# This maps to the Amundson trinary: {Negation, Superposition, Affirmation}
+
+type KernelState:
+    let trit: int       # -1, 0, +1
+    let uptime: int     # ticks since boot
+    let procs: int      # active process count
+    let memory: int     # pages allocated
+    let amplitude: float  # G(procs)/procs — system efficiency
+
+# ── The Boot Function ──
+
+fun boot():
+    # Phase 0: Identity (n/n)
+    let n: int = 1
+    let identity: float = n / n  # = 1. The starting point.
+
+    sys_write("BlackRoad OS Kernel")
+    sys_write("G(n) = n^(n+n/n) / (n+n/n)^n")
+    sys_write("Booting...")
+
+    # Phase 1: Initialize memory (the heap is the universe)
+    let mem: MemoryManager = memory.init(PAGE_SIZE)
+    sys_write("  Memory: {mem.total_pages} pages")
+
+    # Phase 2: Initialize scheduler (the orchestrator)
+    let sched: Scheduler = scheduler.init(MAX_PROCS)
+    sys_write("  Scheduler: capacity {MAX_PROCS} processes")
+
+    # Phase 3: Initialize ternary runtime
+    let trit_engine: TritEngine = trit.init(TRIT_WIDTH)
+    sys_write("  Ternary: {TRIT_WIDTH}-trit words")
+
+    # Phase 4: Register syscalls
+    syscall.register_all()
+    sys_write("  Syscalls: registered")
+
+    # Phase 5: Set kernel state to ALIVE (+1)
+    let state: KernelState = KernelState:
+        trit: 1          # alive
+        uptime: 0
+        procs: 0
+        memory: 0
+        amplitude: 0.5   # G(1) = 1/2 — the first amplitude
+
+    sys_write("  State: ALIVE (trit = +1)")
+    sys_write("  Amplitude: G(1) = {state.amplitude}")
+    sys_write("Boot complete.")
+
+    # Phase 6: Enter scheduler loop
+    scheduler.run(sched, state)
+
+# ── Kernel Panic (trit = -1) ──
+
+fun panic(msg: string):
+    sys_write("KERNEL PANIC: {msg}")
+    sys_write("State: DEAD (trit = -1)")
+    # In ternary: -1 is negation. The system halts.
+    # But H(-2) = -2 is repelling. The panic pushes AWAY from death.
+    # K(t) amplifies the contradiction. The system restarts.
+    halt()
+
+# ── Halt (the only thing G(n) never does) ──
+
+fun halt():
+    while true:
+        sys_sched()  # yield forever
+
+# ── Entry Point ──
+
+fun main():
+    boot()

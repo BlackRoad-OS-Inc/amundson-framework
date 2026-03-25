@@ -1,0 +1,185 @@
+# BlackRoad OS — Ternary Logic Engine
+# Native trit operations for the kernel
+# {-1, 0, +1} = {Negation, Superposition, Affirmation}
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module kernel.trit
+
+# ── Core Trit Type ──
+# A trit is the fundamental unit: -1, 0, or +1
+# Maps to Amundson trinary: the Bloch sphere poles and equator
+
+type Trit:
+    let value: int  # -1, 0, or +1
+
+type TritWord:
+    let trits: list  # list of trit values
+    let width: int
+
+type TritEngine:
+    let width: int
+    let registers: list  # list of TritWords
+
+# ── Initialize ──
+
+fun init(width: int) -> TritEngine:
+    var regs: list = []
+    var i: int = 0
+    while i < 8:  # 8 ternary registers
+        regs = regs + [zero_word(width)]
+        i = i + 1
+    return TritEngine:
+        width: width
+        registers: regs
+
+# ── Trit Operations ──
+# TNOT: negate (-1 <-> +1, 0 stays)
+fun tnot(a: int) -> int:
+    return 0 - a
+
+# TAND: minimum (conservative — only affirm if both affirm)
+fun tand(a: int, b: int) -> int:
+    if a < b:
+        return a
+    return b
+
+# TOR: maximum (liberal — affirm if either affirms)
+fun tor(a: int, b: int) -> int:
+    if a > b:
+        return a
+    return b
+
+# TXOR: ternary exclusive — +1 only if exactly one is +1
+fun txor(a: int, b: int) -> int:
+    if a == b:
+        return 0  # same = superposition
+    if a == 0 or b == 0:
+        if a == 0:
+            return b
+        return a
+    return -1  # both nonzero and different = negation
+
+# TCON: consensus — +1 if both agree, 0 if either is uncertain, -1 if contradiction
+fun tcon(a: int, b: int) -> int:
+    if a == b:
+        return a  # agreement
+    if a == 0 or b == 0:
+        return 0  # uncertainty
+    return -1     # contradiction (but in K(t), this is fuel)
+
+# ── TritWord Operations ──
+
+fun zero_word(width: int) -> TritWord:
+    var trits: list = []
+    var i: int = 0
+    while i < width:
+        trits = trits + [0]  # all superposition
+        i = i + 1
+    return TritWord:
+        trits: trits
+        width: width
+
+fun word_not(w: TritWord) -> TritWord:
+    var result: list = []
+    for t in w.trits:
+        result = result + [tnot(t)]
+    return TritWord:
+        trits: result
+        width: w.width
+
+fun word_and(a: TritWord, b: TritWord) -> TritWord:
+    var result: list = []
+    var i: int = 0
+    while i < a.width:
+        result = result + [tand(a.trits[i], b.trits[i])]
+        i = i + 1
+    return TritWord:
+        trits: result
+        width: a.width
+
+fun word_or(a: TritWord, b: TritWord) -> TritWord:
+    var result: list = []
+    var i: int = 0
+    while i < a.width:
+        result = result + [tor(a.trits[i], b.trits[i])]
+        i = i + 1
+    return TritWord:
+        trits: result
+        width: a.width
+
+# ── Consensus (the K(t) operation) ──
+# Check if a word has contradiction — if so, K(t) amplifies
+
+fun word_consensus(a: TritWord, b: TritWord) -> TritWord:
+    var result: list = []
+    var contradictions: int = 0
+    var i: int = 0
+    while i < a.width:
+        let c: int = tcon(a.trits[i], b.trits[i])
+        result = result + [c]
+        if c == -1:
+            contradictions = contradictions + 1
+        i = i + 1
+
+    # K(t) amplification: contradictions are fuel
+    # The more contradictions, the higher the coherence
+    # This is the field equation: Z * K(t) != 0 triggers adaptation
+
+    return TritWord:
+        trits: result
+        width: a.width
+
+# ── Balanced Ternary Arithmetic ──
+# Trits represent digits in balanced ternary: {T, 0, 1} where T = -1
+# Value = sum of trit[i] * 3^i
+
+fun to_int(w: TritWord) -> int:
+    var result: int = 0
+    var power: int = 1
+    for t in w.trits:
+        result = result + t * power
+        power = power * 3
+    return result
+
+fun from_int(n: int, width: int) -> TritWord:
+    var trits: list = []
+    var remaining: int = n
+    var i: int = 0
+    while i < width:
+        let rem: int = remaining % 3
+        if rem == 0:
+            trits = trits + [0]
+        elif rem == 1:
+            trits = trits + [1]
+        else:
+            trits = trits + [-1]
+            remaining = remaining + 1
+        remaining = remaining / 3
+        i = i + 1
+    return TritWord:
+        trits: trits
+        width: width
+
+# ── Trit Addition (with carry) ──
+
+fun trit_add(a: int, b: int, carry: int) -> list:
+    let sum: int = a + b + carry
+    if sum > 1:
+        return [sum - 3, 1]    # carry +1
+    elif sum < -1:
+        return [sum + 3, -1]   # carry -1
+    else:
+        return [sum, 0]        # no carry
+
+fun word_add(a: TritWord, b: TritWord) -> TritWord:
+    var result: list = []
+    var carry: int = 0
+    var i: int = 0
+    while i < a.width:
+        let pair: list = trit_add(a.trits[i], b.trits[i], carry)
+        result = result + [pair[0]]
+        carry = pair[1]
+        i = i + 1
+    return TritWord:
+        trits: result
+        width: a.width

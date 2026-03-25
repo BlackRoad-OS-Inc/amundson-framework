@@ -1,0 +1,135 @@
+# BlackRoad OS — GPIO Driver for Raspberry Pi
+# Ada Lovelace would approve. Adafruit RS485 HAT compatible.
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module drivers.gpio
+
+# ── Pin States (trinary, naturally) ──
+# -1 = LOW  (0V)
+#  0 = HIGH-Z (floating/tristate — the superposition state)
+# +1 = HIGH (3.3V)
+#
+# Standard GPIO is binary (HIGH/LOW).
+# Ternary adds HIGH-Z — the pin is neither driven high nor low.
+# This is REAL hardware: tristate buffers exist.
+# The superposition state is physically real on a wire.
+
+let LOW: int = -1
+let HIGH_Z: int = 0
+let HIGH: int = 1
+
+type Pin:
+    let number: int
+    let mode: string     # "in", "out", "tristate"
+    let state: int       # trit
+    let pull: string     # "up", "down", "none"
+
+type GPIOController:
+    let pins: list
+    let pin_count: int
+    let i2c_enabled: bool
+    let spi_enabled: bool
+    let uart_enabled: bool
+
+# ── Initialize for Pi 5 ──
+
+fun init_pi5() -> GPIOController:
+    var pins: list = []
+    var i: int = 0
+    while i < 40:
+        pins = pins + [Pin:
+            number: i
+            mode: "in"
+            state: HIGH_Z  # all start floating (superposition)
+            pull: "none"
+        ]
+        i = i + 1
+
+    return GPIOController:
+        pins: pins
+        pin_count: 40
+        i2c_enabled: false
+        spi_enabled: false
+        uart_enabled: false
+
+# ── Pin Operations ──
+
+fun set_mode(gpio: GPIOController, pin: int, mode: string):
+    gpio.pins[pin].mode = mode
+
+fun write_pin(gpio: GPIOController, pin: int, value: int):
+    # value is a trit: -1 (LOW), 0 (HIGH-Z), +1 (HIGH)
+    gpio.pins[pin].state = value
+
+fun read_pin(gpio: GPIOController, pin: int) -> int:
+    return gpio.pins[pin].state
+
+# ── RS485 HAT (Adafruit) ──
+# Half-duplex differential signaling
+# Uses UART + direction control pin
+
+type RS485:
+    let tx_pin: int
+    let rx_pin: int
+    let de_pin: int      # driver enable
+    let re_pin: int      # receiver enable (active low)
+    let baud: int
+    let state: int       # trit: -1 receiving, 0 idle, +1 transmitting
+
+fun init_rs485(gpio: GPIOController) -> RS485:
+    # Standard Adafruit RS485 HAT pins
+    let dev: RS485 = RS485:
+        tx_pin: 14       # GPIO14 = UART TX
+        rx_pin: 15       # GPIO15 = UART RX
+        de_pin: 4        # GPIO4 = Driver Enable
+        re_pin: 17       # GPIO17 = Receiver Enable
+        baud: 9600
+        state: 0         # idle (superposition — neither tx nor rx)
+
+    set_mode(gpio, dev.tx_pin, "out")
+    set_mode(gpio, dev.rx_pin, "in")
+    set_mode(gpio, dev.de_pin, "out")
+    set_mode(gpio, dev.re_pin, "out")
+
+    # Start in receive mode
+    write_pin(gpio, dev.de_pin, LOW)   # disable driver
+    write_pin(gpio, dev.re_pin, LOW)   # enable receiver (active low)
+    dev.state = -1  # receiving
+
+    sys_write("RS485: initialized at {dev.baud} baud")
+    return dev
+
+fun rs485_transmit(gpio: GPIOController, rs: RS485, data: list):
+    # Switch to transmit mode
+    write_pin(gpio, rs.de_pin, HIGH)   # enable driver
+    write_pin(gpio, rs.re_pin, HIGH)   # disable receiver
+    rs.state = 1  # transmitting (+1)
+
+    for byte in data:
+        write_pin(gpio, rs.tx_pin, byte)
+
+    # Switch back to receive
+    write_pin(gpio, rs.de_pin, LOW)
+    write_pin(gpio, rs.re_pin, LOW)
+    rs.state = -1  # receiving
+
+fun rs485_receive(gpio: GPIOController, rs: RS485) -> int:
+    return read_pin(gpio, rs.rx_pin)
+
+# ── I2C (for sensors, displays, etc.) ──
+
+fun init_i2c(gpio: GPIOController):
+    set_mode(gpio, 2, "out")  # SDA
+    set_mode(gpio, 3, "out")  # SCL
+    gpio.i2c_enabled = true
+    sys_write("I2C: enabled on GPIO2/3")
+
+# ── SPI (for high-speed peripherals) ──
+
+fun init_spi(gpio: GPIOController):
+    set_mode(gpio, 10, "out")  # MOSI
+    set_mode(gpio, 9, "in")    # MISO
+    set_mode(gpio, 11, "out")  # SCLK
+    set_mode(gpio, 8, "out")   # CE0
+    gpio.spi_enabled = true
+    sys_write("SPI: enabled on GPIO8-11")

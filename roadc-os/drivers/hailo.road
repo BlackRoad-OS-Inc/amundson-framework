@@ -1,0 +1,94 @@
+# BlackRoad OS — Hailo-8 NPU Driver
+# 26 TOPS edge AI inference
+# G(26)/26 = 0.3748 efficiency
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module drivers.hailo
+
+# ── Hailo Device ──
+
+let HAILO_TOPS: int = 26
+let HAILO_DEVICE: string = "/dev/hailo0"
+
+type HailoDevice:
+    let id: int
+    let tops: int           # tera operations per second
+    let efficiency: float   # G(tops)/tops
+    let state: int          # trit: -1 dead, 0 idle, +1 running
+    let model: string       # loaded HEF model name
+    let fps: float          # current frames per second
+
+type InferenceResult:
+    let detections: list
+    let latency_ms: float
+    let ops_used: int
+
+# ── Initialize ──
+
+fun init() -> HailoDevice:
+    let eff: float = amundson_efficiency(HAILO_TOPS)
+    return HailoDevice:
+        id: 0
+        tops: HAILO_TOPS
+        efficiency: eff
+        state: 0         # idle (superposition)
+        model: ""
+        fps: 0.0
+
+fun amundson_efficiency(n: int) -> float:
+    # G(n)/n = (n/(n+1))^n
+    let ratio: float = n / (n + 1)
+    var result: float = 1.0
+    var i: int = 0
+    while i < n:
+        result = result * ratio
+        i = i + 1
+    return result
+
+# ── Load Model ──
+
+fun load_model(dev: HailoDevice, hef_path: string):
+    dev.model = hef_path
+    dev.state = 1  # running
+    sys_write("Hailo: loaded {hef_path} on device {dev.id}")
+    sys_write("  TOPS: {dev.tops}")
+    sys_write("  Efficiency: {dev.efficiency}")
+
+# ── Run Inference ──
+
+fun infer(dev: HailoDevice, input_data: list) -> InferenceResult:
+    if dev.state != 1:
+        sys_write("Hailo: device not ready (state={dev.state})")
+        return InferenceResult:
+            detections: []
+            latency_ms: 0.0
+            ops_used: 0
+
+    # Inference cost depends on model
+    # YOLOv8: ~20 billion ops per frame
+    # At 26 TOPS: 20e9 / 26e12 = 0.77ms per frame = 1300 fps
+    let ops: int = 20000000000
+    let latency: float = ops / (dev.tops * 1000000000000) * 1000
+
+    return InferenceResult:
+        detections: []  # populated by actual HEF runtime
+        latency_ms: latency
+        ops_used: ops
+
+# ── Dual Hailo (both chips) ──
+
+fun init_dual() -> list:
+    let dev0: HailoDevice = init()
+    dev0.id = 0
+    let dev1: HailoDevice = init()
+    dev1.id = 1
+    dev1.tops = 26
+
+    let combined_tops: int = dev0.tops + dev1.tops
+    let combined_eff: float = amundson_efficiency(combined_tops)
+
+    sys_write("Hailo: dual mode — {combined_tops} TOPS")
+    sys_write("  G({combined_tops})/{combined_tops} = {combined_eff}")
+    sys_write("  Closer to 1/e than single chip")
+
+    return [dev0, dev1]

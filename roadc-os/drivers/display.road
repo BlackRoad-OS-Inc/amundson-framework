@@ -1,0 +1,81 @@
+# BlackRoad OS — Display Driver
+# HDMI output on Aria + Lucidia
+# Pironman 5 OLED on Cecilia + Octavia
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module drivers.display
+
+# ── Display Types ──
+
+let DISPLAY_HDMI: string = "hdmi"
+let DISPLAY_OLED: string = "oled"    # Pironman 5 SSD1306
+
+type Display:
+    let name: string
+    let display_type: string
+    let width: int
+    let height: int
+    let framebuffer: string  # "/dev/fb0"
+    let state: int           # trit: -1 off, 0 standby, +1 active
+    let node: string
+
+# ── Initialize ──
+
+fun init_hdmi(node: string) -> Display:
+    return Display:
+        name: "HDMI"
+        display_type: DISPLAY_HDMI
+        width: 1920
+        height: 1080
+        framebuffer: "/dev/fb0"
+        state: 1
+        node: node
+
+fun init_oled(node: string) -> Display:
+    # Pironman 5 has SSD1306 128x64 OLED via I2C
+    return Display:
+        name: "Pironman OLED"
+        display_type: DISPLAY_OLED
+        width: 128
+        height: 64
+        framebuffer: ""  # I2C, not framebuffer
+        state: 1
+        node: node
+
+# ── Write to Display ──
+
+fun write_text(disp: Display, text: string, x: int, y: int):
+    if disp.state != 1:
+        return
+    if disp.display_type == DISPLAY_OLED:
+        sys_write("OLED({disp.node}): [{x},{y}] {text}")
+    else:
+        sys_write("HDMI({disp.node}): [{x},{y}] {text}")
+
+fun clear(disp: Display):
+    if disp.state != 1:
+        return
+    sys_write("Display({disp.node}): cleared")
+
+# ── Fleet Status Display (for Pironman OLEDs) ──
+
+fun show_fleet_status(disp: Display, node_name: string, temp: float, load: float, amplitude: float):
+    if disp.display_type != DISPLAY_OLED:
+        return
+    clear(disp)
+    write_text(disp, node_name, 0, 0)
+    write_text(disp, "T:{temp}C L:{load}", 0, 16)
+    write_text(disp, "G(n)/n={amplitude}", 0, 32)
+
+# ── Boot Screen ──
+
+fun show_boot(disp: Display):
+    clear(disp)
+    if disp.display_type == DISPLAY_OLED:
+        write_text(disp, "BlackRoad OS", 16, 0)
+        write_text(disp, "G(n)=n^(n+n/n)", 0, 24)
+        write_text(disp, "/(n+n/n)^n", 16, 40)
+    else:
+        write_text(disp, "BlackRoad OS", 100, 100)
+        write_text(disp, "G(n) = n^(n+n/n) / (n+n/n)^n", 100, 200)
+        write_text(disp, "Remember the Road. Pave Tomorrow.", 100, 300)

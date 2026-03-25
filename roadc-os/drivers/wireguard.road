@@ -1,0 +1,84 @@
+# BlackRoad OS — WireGuard Mesh Driver
+# Encrypted tunnel between all fleet nodes
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module drivers.wireguard
+
+# ── WireGuard Peer ──
+
+type WGPeer:
+    let name: string
+    let public_key: string
+    let endpoint: string     # ip:port
+    let allowed_ips: string  # CIDR
+    let last_handshake: int  # seconds ago
+    let transfer_rx: int     # bytes
+    let transfer_tx: int     # bytes
+    let state: int           # trit: -1 unreachable, 0 connecting, +1 connected
+
+type WGInterface:
+    let name: string         # "wg0"
+    let listen_port: int     # 51820
+    let local_ip: string     # 10.8.0.x
+    let peers: list          # list of WGPeer
+    let state: int           # trit
+
+# ── Fleet WireGuard Mesh ──
+
+fun init_mesh() -> WGInterface:
+    let peers: list = [
+        WGPeer: name: "Alice", public_key: "", endpoint: "192.168.4.49:51820",
+                allowed_ips: "10.8.0.1/32", last_handshake: 0,
+                transfer_rx: 0, transfer_tx: 0, state: 1,
+        WGPeer: name: "Cecilia", public_key: "", endpoint: "192.168.4.96:51820",
+                allowed_ips: "10.8.0.2/32", last_handshake: 0,
+                transfer_rx: 0, transfer_tx: 0, state: 1,
+        WGPeer: name: "Octavia", public_key: "", endpoint: "192.168.4.101:51820",
+                allowed_ips: "10.8.0.3/32", last_handshake: 0,
+                transfer_rx: 0, transfer_tx: 0, state: 1,
+        WGPeer: name: "Aria", public_key: "", endpoint: "192.168.4.98:51820",
+                allowed_ips: "10.8.0.4/32", last_handshake: 0,
+                transfer_rx: 0, transfer_tx: 0, state: 1,
+        WGPeer: name: "Lucidia", public_key: "", endpoint: "192.168.4.38:51820",
+                allowed_ips: "10.8.0.5/32", last_handshake: 0,
+                transfer_rx: 0, transfer_tx: 0, state: 1
+    ]
+
+    return WGInterface:
+        name: "wg0"
+        listen_port: 51820
+        local_ip: ""
+        peers: peers
+        state: 1
+
+# ── Check Peer Status ──
+
+fun check_peers(wg: WGInterface):
+    var connected: int = 0
+    for peer in wg.peers:
+        # In real implementation: wg show wg0
+        if peer.state == 1:
+            connected = connected + 1
+
+    sys_write("WireGuard: {connected}/{len(wg.peers)} peers connected")
+
+# ── Send Data Over Tunnel ──
+
+fun send(wg: WGInterface, dest_name: string, data: string):
+    for peer in wg.peers:
+        if peer.name == dest_name and peer.state == 1:
+            sys_write("WG: -> {dest_name} ({peer.endpoint}) {len(data)} bytes")
+            peer.transfer_tx = peer.transfer_tx + len(data)
+            return
+    sys_write("WG: peer {dest_name} not connected")
+
+fun stats(wg: WGInterface) -> string:
+    var connected: int = 0
+    var total_rx: int = 0
+    var total_tx: int = 0
+    for peer in wg.peers:
+        if peer.state == 1:
+            connected = connected + 1
+        total_rx = total_rx + peer.transfer_rx
+        total_tx = total_tx + peer.transfer_tx
+    return "WireGuard: {connected}/{len(wg.peers)} peers, rx={total_rx} tx={total_tx}"

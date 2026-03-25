@@ -1,0 +1,177 @@
+# BlackRoad OS — Process Scheduler
+# Ternary-native round-robin with G(n) efficiency scaling
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module kernel.scheduler
+
+import kernel.trit
+
+# ── Process States (trinary) ──
+# -1 = DEAD (terminated, resources freed)
+#  0 = SUSPENDED (waiting, in superposition — could go either way)
+# +1 = RUNNING (alive, executing, affirmed)
+
+let DEAD: int = -1
+let SUSPENDED: int = 0
+let RUNNING: int = 1
+
+type Process:
+    let pid: int
+    let name: string
+    let state: int          # trit: -1, 0, +1
+    let priority: int
+    let ticks: int          # CPU ticks consumed
+    let parent: int         # parent pid
+    let children: list      # child pids
+    let heap_start: int     # memory page start
+    let heap_size: int      # pages allocated
+    let amplitude: float    # G(pid)/pid — process efficiency
+
+type Scheduler:
+    let processes: list     # list of Process
+    let current: int        # index of running process
+    let capacity: int       # max processes
+    let tick: int           # global tick counter
+    let fleet_amplitude: float  # G(n)/n for n = active process count
+
+# ── Initialize ──
+
+fun init(capacity: int) -> Scheduler:
+    return Scheduler:
+        processes: []
+        current: 0
+        capacity: capacity
+        tick: 0
+        fleet_amplitude: 0.0
+
+# ── Spawn a Process ──
+
+fun spawn(sched: Scheduler, name: string, parent: int) -> int:
+    let n: int = len(sched.processes) + 1
+
+    if n > sched.capacity:
+        return -1  # cannot spawn — capacity reached
+
+    let pid: int = n
+    let proc: Process = Process:
+        pid: pid
+        name: name
+        state: RUNNING     # born alive (+1)
+        priority: 1
+        ticks: 0
+        parent: parent
+        children: []
+        heap_start: 0
+        heap_size: 0
+        amplitude: amundson_amplitude(pid)
+
+    sched.processes = sched.processes + [proc]
+    update_fleet_amplitude(sched)
+
+    sys_write("  spawn: pid={pid} name={name} amplitude={proc.amplitude}")
+    return pid
+
+# ── Kill a Process ──
+
+fun kill(sched: Scheduler, pid: int):
+    let proc: Process = sched.processes[pid - 1]
+    proc.state = DEAD      # trit = -1
+    update_fleet_amplitude(sched)
+    sys_write("  kill: pid={pid} -> DEAD")
+
+# ── Suspend a Process ──
+
+fun suspend(sched: Scheduler, pid: int):
+    let proc: Process = sched.processes[pid - 1]
+    proc.state = SUSPENDED  # trit = 0 (superposition)
+    sys_write("  suspend: pid={pid} -> SUSPENDED (superposition)")
+
+# ── Wake a Process ──
+
+fun wake(sched: Scheduler, pid: int):
+    let proc: Process = sched.processes[pid - 1]
+    if proc.state == SUSPENDED:
+        proc.state = RUNNING  # trit = +1
+        sys_write("  wake: pid={pid} -> RUNNING")
+
+# ── Round-Robin Scheduler ──
+
+fun run(sched: Scheduler, state: KernelState):
+    sys_write("Scheduler: entering main loop")
+
+    while true:
+        sched.tick = sched.tick + 1
+        state.uptime = sched.tick
+
+        # Count active processes
+        let active: int = count_active(sched)
+        state.procs = active
+
+        if active == 0:
+            sys_write("  No active processes. Idle.")
+            sys_sched()
+            continue
+
+        # Find next RUNNING process (round-robin)
+        let found: bool = false
+        let tries: int = 0
+
+        while tries < len(sched.processes):
+            sched.current = (sched.current + 1) % len(sched.processes)
+            let proc: Process = sched.processes[sched.current]
+
+            if proc.state == RUNNING:
+                # Execute one tick
+                proc.ticks = proc.ticks + 1
+                found = true
+                break
+
+            tries = tries + 1
+
+        if not found:
+            sys_sched()  # yield — all processes suspended or dead
+            continue
+
+        # Update fleet amplitude every 100 ticks
+        if sched.tick % 100 == 0:
+            update_fleet_amplitude(sched)
+            sys_write("  tick={sched.tick} procs={active} amplitude={sched.fleet_amplitude}")
+
+        sys_sched()  # context switch
+
+# ── G(n) Amplitude ──
+# G(n)/n = (n/(n+1))^n — the complement form, pure n
+
+fun amundson_amplitude(n: int) -> float:
+    if n == 0:
+        return 0.0
+    let ratio: float = n / (n + 1)
+    let result: float = 1.0
+    var i: int = 0
+    while i < n:
+        result = result * ratio
+        i = i + 1
+    return result
+
+# G(n) full
+fun amundson_g(n: int) -> float:
+    return n * amundson_amplitude(n)
+
+# ── Fleet Amplitude ──
+# As n processes coordinate, efficiency -> 1/e
+
+fun update_fleet_amplitude(sched: Scheduler):
+    let active: int = count_active(sched)
+    if active > 0:
+        sched.fleet_amplitude = amundson_amplitude(active)
+    else:
+        sched.fleet_amplitude = 0.0
+
+# ── Count Active ──
+
+fun count_active(sched: Scheduler) -> int:
+    var count: int = 0
+    for proc in sched.processes:
+        if proc.state == RUNNING:
+            count = count + 1
+    return count

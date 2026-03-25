@@ -1,0 +1,185 @@
+# BlackRoad OS — CAN Bus Driver
+# SLCAN over USB (Cecilia) + MCP2515 over SPI (Aria)
+# Ternary frame states: -1 error, 0 pending, +1 delivered
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module drivers.can
+
+import kernel.trit
+
+# ── CAN Frame (standard 2.0A) ──
+
+type CANFrame:
+    let id: int          # 11-bit identifier (0x000-0x7FF)
+    let data: list       # up to 8 bytes
+    let dlc: int         # data length code (0-8)
+    let state: int       # trit: -1 error, 0 in-flight, +1 delivered
+    let timestamp: int   # tick when sent
+    let source: string   # node name
+    let dest: string     # target node (or "broadcast")
+
+# ── CAN Bus Interface ──
+
+type CANBus:
+    let name: string         # "slcan0", "can0"
+    let device: string       # "/dev/ttyACM0" or "spi0.0"
+    let bus_type: string     # "slcan" or "mcp2515"
+    let bitrate: int         # 500000 = 500kbps
+    let state: int           # trit: -1 down, 0 init, +1 up
+    let tx_count: int
+    let rx_count: int
+    let error_count: int
+    let frames_pending: list # frames in flight (state = 0)
+
+# ── Fleet CAN IDs ──
+# Each Pi gets a CAN ID range for addressing
+
+let CAN_ID_ALICE: int = 256       # 0x100
+let CAN_ID_CECILIA: int = 512     # 0x200
+let CAN_ID_OCTAVIA: int = 768     # 0x300
+let CAN_ID_ARIA: int = 1024       # 0x400
+let CAN_ID_LUCIDIA: int = 1280    # 0x500
+let CAN_ID_BROADCAST: int = 2047  # 0x7FF
+
+# Message types (lower 4 bits of ID)
+let MSG_HEARTBEAT: int = 1
+let MSG_INFERENCE: int = 2    # Hailo inference request/result
+let MSG_SENSOR: int = 3       # GPIO/sensor data
+let MSG_COMMAND: int = 4      # shell command
+let MSG_AUDIO: int = 5        # mic data from Aria
+let MSG_DISPLAY: int = 6      # display update for Aria
+let MSG_TRIT: int = 7         # ternary state update
+let MSG_AMPLITUDE: int = 8    # G(n) fleet amplitude
+
+# ── Initialize SLCAN (Cecilia USB adapter) ──
+
+fun init_slcan(device: string, bitrate: int) -> CANBus:
+    # SLCAN speed codes: s0=10k s1=20k s2=50k s3=100k s4=125k s5=250k s6=500k s7=800k s8=1M
+    let speed_code: int = 6  # 500kbps default
+
+    if bitrate == 250000:
+        speed_code = 5
+    elif bitrate == 1000000:
+        speed_code = 8
+
+    # Open serial port and configure SLCAN
+    # In real implementation: slcand -o -c -f -s{speed_code} {device} slcan0
+    sys_write("CAN: init SLCAN on {device} at {bitrate}bps")
+
+    return CANBus:
+        name: "slcan0"
+        device: device
+        bus_type: "slcan"
+        bitrate: bitrate
+        state: 1         # up
+        tx_count: 0
+        rx_count: 0
+        error_count: 0
+        frames_pending: []
+
+# ── Initialize MCP2515 (Aria GPIO HAT) ──
+
+fun init_mcp2515(spi_device: string, oscillator: int, interrupt_pin: int, bitrate: int) -> CANBus:
+    # dtoverlay=mcp2515-can0,oscillator={oscillator},interrupt={interrupt_pin}
+    sys_write("CAN: init MCP2515 on {spi_device} osc={oscillator}Hz int=GPIO{interrupt_pin}")
+
+    return CANBus:
+        name: "can0"
+        device: spi_device
+        bus_type: "mcp2515"
+        bitrate: bitrate
+        state: 0         # init (needs physical verification)
+        tx_count: 0
+        rx_count: 0
+        error_count: 0
+        frames_pending: []
+
+# ── Send Frame ──
+
+fun send(bus: CANBus, id: int, data: list, dest: string) -> CANFrame:
+    if bus.state != 1:
+        sys_write("CAN: bus {bus.name} not up (state={bus.state})")
+        return CANFrame:
+            id: id, data: data, dlc: len(data), state: -1,
+            timestamp: 0, source: "", dest: dest
+
+    let frame: CANFrame = CANFrame:
+        id: id
+        data: data
+        dlc: len(data)
+        state: 0         # pending (in-flight)
+        timestamp: 0
+        source: bus.name
+        dest: dest
+
+    bus.frames_pending = bus.frames_pending + [frame]
+    bus.tx_count = bus.tx_count + 1
+
+    # In real implementation: cansend {bus.name} {hex_id}#{hex_data}
+    return frame
+
+# ── Receive Frame ──
+
+fun receive(bus: CANBus) -> CANFrame:
+    if bus.state != 1:
+        return CANFrame:
+            id: 0, data: [], dlc: 0, state: -1,
+            timestamp: 0, source: "", dest: ""
+
+    # In real implementation: candump {bus.name} with timeout
+    bus.rx_count = bus.rx_count + 1
+
+    return CANFrame:
+        id: 0, data: [], dlc: 0, state: 0,
+        timestamp: 0, source: bus.name, dest: ""
+
+# ── Fleet Messages ──
+
+fun send_heartbeat(bus: CANBus, node_id: int, procs: int, amplitude: float):
+    # Heartbeat: 8 bytes = [node_id_high, node_id_low, procs_high, procs_low, amp*255 (4 bytes)]
+    let amp_byte: int = int(amplitude * 255)
+    let data: list = [node_id / 256, node_id % 256, procs / 256, procs % 256, amp_byte, 0, 0, 0]
+    send(bus, node_id + MSG_HEARTBEAT, data, "broadcast")
+
+fun send_inference_request(bus: CANBus, source_id: int, model: string, input_size: int):
+    # Request Hailo inference from another node
+    let data: list = [input_size / 256, input_size % 256, 0, 0, 0, 0, 0, 0]
+    send(bus, source_id + MSG_INFERENCE, data, "hailo")
+
+fun send_trit_state(bus: CANBus, node_id: int, trit_word: list):
+    # Send ternary state (up to 8 trits per frame)
+    let data: list = []
+    for t in trit_word:
+        # Map trit {-1, 0, +1} to byte {0, 1, 2}
+        data = data + [t + 1]
+    send(bus, node_id + MSG_TRIT, data, "broadcast")
+
+fun send_amplitude(bus: CANBus, node_id: int, n: int):
+    # Send G(n)/n efficiency for fleet coordination
+    let amp: float = amundson_efficiency(n)
+    let amp_int: int = int(amp * 1000000)  # 6 decimal places as integer
+    let data: list = [
+        n / 256, n % 256,
+        amp_int / 16777216 % 256,
+        amp_int / 65536 % 256,
+        amp_int / 256 % 256,
+        amp_int % 256,
+        0, 0
+    ]
+    send(bus, node_id + MSG_AMPLITUDE, data, "broadcast")
+
+fun amundson_efficiency(n: int) -> float:
+    if n == 0:
+        return 0.0
+    let ratio: float = n / (n + 1)
+    var result: float = 1.0
+    var i: int = 0
+    while i < n:
+        result = result * ratio
+        i = i + 1
+    return result
+
+# ── Bus Stats ──
+
+fun stats(bus: CANBus) -> string:
+    return "CAN {bus.name}: state={bus.state} tx={bus.tx_count} rx={bus.rx_count} err={bus.error_count} pending={len(bus.frames_pending)}"

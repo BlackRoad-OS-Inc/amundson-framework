@@ -1,0 +1,239 @@
+# BlackRoad OS — Fleet Orchestrator
+# Wires all 5 Pis + peripherals into one system
+# CAN bus + WireGuard + Hailo + GPIO + Audio
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module net.fleet
+
+import kernel.scheduler
+import kernel.trit
+import drivers.can
+import drivers.hailo
+import drivers.gpio
+import net.mesh
+
+# ── Fleet Node Definition ──
+
+type FleetNode:
+    let name: string
+    let ip: string
+    let wg_ip: string       # WireGuard IP
+    let role: string
+    let state: int           # trit
+    let tops: int            # Hailo TOPS (0 if none)
+    let ollama_models: int
+    let has_can: bool
+    let has_display: bool
+    let has_mic: bool
+    let has_hailo: bool
+    let can_bus: CANBus
+    let temp: float
+    let load: float
+    let disk_pct: int
+    let amplitude: float     # G(n)/n at this node's scale
+
+# ── The Fleet ──
+
+type Fleet:
+    let nodes: list          # list of FleetNode
+    let total_tops: int
+    let total_models: int
+    let can_network: CANBus  # shared CAN bus
+    let fleet_amplitude: float  # G(n)/n for n = active nodes
+    let heartbeat_interval: int # ticks between heartbeats
+
+# ── Initialize Fleet ──
+
+fun init() -> Fleet:
+    let alice: FleetNode = FleetNode:
+        name: "Alice", ip: "192.168.4.49", wg_ip: "10.8.0.1",
+        role: "gateway", state: 1, tops: 0, ollama_models: 9,
+        has_can: false, has_display: false, has_mic: false, has_hailo: false,
+        can_bus: null, temp: 36.5, load: 2.57, disk_pct: 81,
+        amplitude: 0.0
+
+    let cecilia: FleetNode = FleetNode:
+        name: "Cecilia", ip: "192.168.4.96", wg_ip: "10.8.0.2",
+        role: "compute", state: 1, tops: 26, ollama_models: 9,
+        has_can: true, has_display: false, has_mic: false, has_hailo: true,
+        can_bus: can.init_slcan("/dev/ttyACM0", 500000),
+        temp: 41.4, load: 0.62, disk_pct: 29,
+        amplitude: can.amundson_efficiency(26)
+
+    let octavia: FleetNode = FleetNode:
+        name: "Octavia", ip: "192.168.4.101", wg_ip: "10.8.0.3",
+        role: "compute", state: 1, tops: 26, ollama_models: 25,
+        has_can: false, has_display: false, has_mic: false, has_hailo: true,
+        can_bus: null, temp: 33.1, load: 0.65, disk_pct: 46,
+        amplitude: can.amundson_efficiency(26)
+
+    let aria: FleetNode = FleetNode:
+        name: "Aria", ip: "192.168.4.98", wg_ip: "10.8.0.4",
+        role: "interface", state: 1, tops: 0, ollama_models: 4,
+        has_can: true, has_display: true, has_mic: true, has_hailo: false,
+        can_bus: can.init_mcp2515("spi0.0", 16000000, 25, 500000),
+        temp: 56.8, load: 0.06, disk_pct: 67,
+        amplitude: 0.0
+
+    let lucidia: FleetNode = FleetNode:
+        name: "Lucidia", ip: "192.168.4.38", wg_ip: "10.8.0.5",
+        role: "storage", state: 1, tops: 0, ollama_models: 9,
+        has_can: false, has_display: true, has_mic: false, has_hailo: false,
+        can_bus: null, temp: 55.1, load: 15.66, disk_pct: 34,
+        amplitude: 0.0
+
+    let nodes: list = [alice, cecilia, octavia, aria, lucidia]
+    let total_tops: int = 52  # 26 + 26
+    let total_models: int = 9 + 9 + 25 + 4 + 9
+
+    let fleet: Fleet = Fleet:
+        nodes: nodes
+        total_tops: total_tops
+        total_models: total_models
+        can_network: cecilia.can_bus
+        fleet_amplitude: can.amundson_efficiency(5)
+        heartbeat_interval: 100
+
+    sys_write("Fleet initialized:")
+    sys_write("  Nodes: {len(nodes)}")
+    sys_write("  TOPS: {total_tops}")
+    sys_write("  Models: {total_models}")
+    sys_write("  CAN: {cecilia.can_bus.name} on Cecilia")
+    sys_write("  Fleet amplitude G(5)/5 = {fleet.fleet_amplitude}")
+    return fleet
+
+# ── Heartbeat Loop ──
+
+fun heartbeat(fleet: Fleet):
+    let bus: CANBus = fleet.can_network
+
+    for node in fleet.nodes:
+        if node.state == 1 and node.has_can:
+            # Send heartbeat on CAN
+            let node_id: int = get_can_id(node.name)
+            let procs: int = node.ollama_models
+            can.send_heartbeat(bus, node_id, procs, node.amplitude)
+
+        # Send amplitude update
+        if node.has_hailo:
+            let node_id: int = get_can_id(node.name)
+            can.send_amplitude(bus, node_id, node.tops)
+
+fun get_can_id(name: string) -> int:
+    if name == "Alice":
+        return can.CAN_ID_ALICE
+    elif name == "Cecilia":
+        return can.CAN_ID_CECILIA
+    elif name == "Octavia":
+        return can.CAN_ID_OCTAVIA
+    elif name == "Aria":
+        return can.CAN_ID_ARIA
+    elif name == "Lucidia":
+        return can.CAN_ID_LUCIDIA
+    return can.CAN_ID_BROADCAST
+
+# ── Inference Request (route to best Hailo node) ──
+
+fun request_inference(fleet: Fleet, model: string, data: list) -> string:
+    # Find the best compute node (lowest load with Hailo)
+    var best: FleetNode = null
+    var best_load: float = 999.0
+
+    for node in fleet.nodes:
+        if node.has_hailo and node.state == 1:
+            if node.load < best_load:
+                best = node
+                best_load = node.load
+
+    if best == null:
+        return "error: no Hailo nodes available"
+
+    sys_write("Routing inference to {best.name} (load={best.load}, {best.tops} TOPS)")
+
+    # Send via CAN if available, otherwise WireGuard
+    if best.has_can:
+        let bus: CANBus = fleet.can_network
+        can.send_inference_request(bus, get_can_id(best.name), model, len(data))
+        return "sent via CAN to {best.name}"
+    else:
+        return "sent via WireGuard to {best.name}:{best.ip}"
+
+# ── Audio Capture (route to Aria) ──
+
+fun capture_audio(fleet: Fleet) -> string:
+    for node in fleet.nodes:
+        if node.has_mic and node.state == 1:
+            sys_write("Audio: capturing from {node.name} (TONOR TC-777)")
+            return "audio from {node.name}"
+    return "error: no mic available"
+
+# ── Display Output (route to Aria or Lucidia) ──
+
+fun display(fleet: Fleet, content: string) -> string:
+    for node in fleet.nodes:
+        if node.has_display and node.state == 1:
+            sys_write("Display: sending to {node.name}")
+            if node.has_can:
+                let bus: CANBus = fleet.can_network
+                # Send display command via CAN
+                can.send(bus, get_can_id(node.name) + can.MSG_DISPLAY, [], node.name)
+            return "displayed on {node.name}"
+    return "error: no display available"
+
+# ── Fleet Status ──
+
+fun status(fleet: Fleet):
+    sys_write("")
+    sys_write("  BlackRoad Fleet Status")
+    sys_write("  =====================")
+    sys_write("")
+
+    for node in fleet.nodes:
+        let state_str: string = "DEAD"
+        if node.state == 0:
+            state_str = "SUSPENDED"
+        elif node.state == 1:
+            state_str = "ALIVE"
+
+        let features: string = ""
+        if node.has_hailo:
+            features = features + " hailo({node.tops}T)"
+        if node.has_can:
+            features = features + " can"
+        if node.has_mic:
+            features = features + " mic"
+        if node.has_display:
+            features = features + " display"
+
+        sys_write("  {node.name:10s} {node.ip:16s} {state_str:10s} {node.temp}C load={node.load}{features}")
+
+    sys_write("")
+    sys_write("  Total: {fleet.total_tops} TOPS | {fleet.total_models} models | G(5)/5 = {fleet.fleet_amplitude}")
+    sys_write("  CAN: {can.stats(fleet.can_network)}")
+    sys_write("")
+
+# ── Main Fleet Loop ──
+
+fun run(fleet: Fleet):
+    sys_write("Fleet: entering main loop")
+    var tick: int = 0
+
+    while true:
+        tick = tick + 1
+
+        # Heartbeat every N ticks
+        if tick % fleet.heartbeat_interval == 0:
+            heartbeat(fleet)
+
+        # Update fleet amplitude based on active nodes
+        var active: int = 0
+        for node in fleet.nodes:
+            if node.state == 1:
+                active = active + 1
+        fleet.fleet_amplitude = can.amundson_efficiency(active)
+
+        # Status every 1000 ticks
+        if tick % 1000 == 0:
+            status(fleet)
+
+        sys_sched()  # yield

@@ -1,0 +1,134 @@
+# BlackRoad OS — Mesh Network Layer
+# WireGuard + NATS + RS485 mesh
+# Ternary routing: +1 arrived, 0 pending, -1 already answered (cancel)
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module net.mesh
+
+import kernel.trit
+
+# ── Node Identity ──
+
+type Node:
+    let id: string
+    let ip: string
+    let port: int
+    let name: string
+    let state: int      # trit: -1 offline, 0 connecting, +1 online
+    let tops: int       # compute capacity
+    let role: string    # "gateway", "compute", "storage", "edge"
+
+# ── Mesh Network ──
+
+type Mesh:
+    let nodes: list
+    let routes: dict     # node_id -> list of neighbor node_ids
+    let pending: list    # messages in flight (state = 0)
+    let delivered: list  # messages arrived (state = +1)
+    let cancelled: list  # redundant messages cancelled (state = -1)
+
+# ── Message (trinary state) ──
+
+type Message:
+    let id: string
+    let source: string
+    let dest: string
+    let payload: string
+    let state: int       # trit: -1 cancelled, 0 in-flight, +1 delivered
+    let hops: int
+    let ttl: int
+
+# ── Initialize Fleet ──
+
+fun init_fleet() -> Mesh:
+    let nodes: list = [
+        Node: id: "alice", ip: "192.168.4.49", port: 51820, name: "Alice",
+              state: 1, tops: 0, role: "gateway",
+        Node: id: "cecilia", ip: "192.168.4.96", port: 51820, name: "Cecilia",
+              state: 0, tops: 26, role: "compute",
+        Node: id: "octavia", ip: "192.168.4.101", port: 51820, name: "Octavia",
+              state: 1, tops: 26, role: "compute",
+        Node: id: "aria", ip: "192.168.4.98", port: 51820, name: "Aria",
+              state: 1, tops: 0, role: "edge",
+        Node: id: "lucidia", ip: "192.168.4.38", port: 51820, name: "Lucidia",
+              state: 1, tops: 0, role: "storage"
+    ]
+
+    return Mesh:
+        nodes: nodes
+        routes: {}
+        pending: []
+        delivered: []
+        cancelled: []
+
+# ── Ternary Routing ──
+# BlackBox Protocol: multi-path, first-arrival cancels redundant
+#
+# When a message is sent:
+#   1. It goes to ALL neighbors (state = 0, pending)
+#   2. First to arrive at destination: state = +1 (delivered)
+#   3. All other copies: state = -1 (cancelled)
+#
+# The -1 cancellation is the ternary advantage:
+# Binary routing: redundant packets waste bandwidth
+# Ternary routing: redundant packets self-cancel
+
+fun send(mesh: Mesh, source: string, dest: string, payload: string):
+    let msg: Message = Message:
+        id: "msg-" + source + "-" + dest
+        source: source
+        dest: dest
+        payload: payload
+        state: 0     # in-flight (superposition)
+        hops: 0
+        ttl: 10
+
+    mesh.pending = mesh.pending + [msg]
+
+    # Multi-path: send to all neighbors of source
+    # First arrival wins, rest cancel
+
+fun deliver(mesh: Mesh, msg_id: string):
+    for msg in mesh.pending:
+        if msg.id == msg_id:
+            msg.state = 1  # delivered (+1)
+            mesh.delivered = mesh.delivered + [msg]
+
+    # Cancel all other copies of this message
+    for msg in mesh.pending:
+        if msg.id == msg_id and msg.state == 0:
+            msg.state = -1  # cancelled
+            mesh.cancelled = mesh.cancelled + [msg]
+
+# ── Fleet Amplitude ──
+
+fun fleet_amplitude(mesh: Mesh) -> float:
+    var online: int = 0
+    for node in mesh.nodes:
+        if node.state == 1:
+            online = online + 1
+
+    if online == 0:
+        return 0.0
+
+    # G(n)/n for n = online nodes
+    let ratio: float = online / (online + 1)
+    var result: float = 1.0
+    var i: int = 0
+    while i < online:
+        result = result * ratio
+        i = i + 1
+    return result
+
+# ── Stats ──
+
+fun stats(mesh: Mesh) -> string:
+    var online: int = 0
+    var total_tops: int = 0
+    for node in mesh.nodes:
+        if node.state == 1:
+            online = online + 1
+            total_tops = total_tops + node.tops
+
+    let amp: float = fleet_amplitude(mesh)
+    return "Mesh: {online}/{len(mesh.nodes)} nodes online, {total_tops} TOPS, amplitude={amp}"

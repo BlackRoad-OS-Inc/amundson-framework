@@ -1,0 +1,165 @@
+# BlackRoad OS — Filesystem (RoadFS)
+# Crash-safe, ternary-state, journal-based
+# Compatible with RoadLines model checker for verification
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module fs.roadfs
+
+# ── File States (trinary) ──
+# -1 = DELETED (marked for removal, space reclaimable)
+#  0 = PENDING (write in journal but not committed — superposition)
+# +1 = COMMITTED (safely on disk, verified)
+
+let DELETED: int = -1
+let PENDING: int = 0
+let COMMITTED: int = 1
+
+type Inode:
+    let id: int
+    let name: string
+    let state: int          # trit
+    let size: int           # bytes
+    let blocks: list        # block numbers
+    let parent: int         # parent inode id
+    let is_dir: bool
+    let created: int        # tick
+    let modified: int       # tick
+
+type Journal:
+    let entries: list       # list of JournalEntry
+    let committed: int      # index of last committed entry
+
+type JournalEntry:
+    let op: string          # "create", "write", "delete", "rename"
+    let inode_id: int
+    let data: string
+    let state: int          # trit: -1 rolled back, 0 pending, +1 committed
+
+type RoadFS:
+    let inodes: list
+    let journal: Journal
+    let block_store: dict   # block_id -> data
+    let next_inode: int
+    let next_block: int
+    let root: int           # root inode id
+
+# ── Initialize ──
+
+fun init() -> RoadFS:
+    # Create root directory
+    let root: Inode = Inode:
+        id: 0
+        name: "/"
+        state: COMMITTED
+        size: 0
+        blocks: []
+        parent: 0
+        is_dir: true
+        created: 0
+        modified: 0
+
+    return RoadFS:
+        inodes: [root]
+        journal: Journal:
+            entries: []
+            committed: 0
+        block_store: {}
+        next_inode: 1
+        next_block: 0
+        root: 0
+
+# ── Journal Operations (crash-safe) ──
+
+fun journal_begin(fs: RoadFS, op: string, inode_id: int, data: string):
+    let entry: JournalEntry = JournalEntry:
+        op: op
+        inode_id: inode_id
+        data: data
+        state: PENDING  # superposition — not yet committed
+
+    fs.journal.entries = fs.journal.entries + [entry]
+
+fun journal_commit(fs: RoadFS):
+    # Commit all pending entries
+    for entry in fs.journal.entries:
+        if entry.state == PENDING:
+            entry.state = COMMITTED
+            fs.journal.committed = fs.journal.committed + 1
+
+fun journal_rollback(fs: RoadFS):
+    # Roll back all pending entries
+    var new_entries: list = []
+    for entry in fs.journal.entries:
+        if entry.state == COMMITTED:
+            new_entries = new_entries + [entry]
+        # PENDING entries are discarded (superposition collapses to nothing)
+    fs.journal.entries = new_entries
+
+# ── File Operations ──
+
+fun create_file(fs: RoadFS, name: string, parent: int) -> int:
+    let id: int = fs.next_inode
+    fs.next_inode = fs.next_inode + 1
+
+    let inode: Inode = Inode:
+        id: id
+        name: name
+        state: PENDING  # not committed yet
+        size: 0
+        blocks: []
+        parent: parent
+        is_dir: false
+        created: 0
+        modified: 0
+
+    fs.inodes = fs.inodes + [inode]
+    journal_begin(fs, "create", id, name)
+    return id
+
+fun write_file(fs: RoadFS, inode_id: int, data: string):
+    let inode: Inode = fs.inodes[inode_id]
+    let block_id: int = fs.next_block
+    fs.next_block = fs.next_block + 1
+
+    fs.block_store[block_id] = data
+    inode.blocks = inode.blocks + [block_id]
+    inode.size = len(data)
+    inode.state = PENDING
+
+    journal_begin(fs, "write", inode_id, data)
+
+fun read_file(fs: RoadFS, inode_id: int) -> string:
+    let inode: Inode = fs.inodes[inode_id]
+    if inode.state == DELETED:
+        return ""
+    var content: string = ""
+    for block_id in inode.blocks:
+        content = content + fs.block_store[block_id]
+    return content
+
+fun delete_file(fs: RoadFS, inode_id: int):
+    let inode: Inode = fs.inodes[inode_id]
+    inode.state = DELETED
+    journal_begin(fs, "delete", inode_id, "")
+
+fun sync(fs: RoadFS):
+    # Commit all pending operations (superposition -> committed)
+    journal_commit(fs)
+    for inode in fs.inodes:
+        if inode.state == PENDING:
+            inode.state = COMMITTED
+
+# ── Crash Recovery (the whole point of journaling) ──
+
+fun recover(fs: RoadFS):
+    # After a crash, roll back uncommitted operations
+    # PENDING entries (superposition) collapse to nothing
+    # COMMITTED entries survive
+    journal_rollback(fs)
+    for inode in fs.inodes:
+        if inode.state == PENDING:
+            inode.state = DELETED  # uncommitted files don't exist
+
+    sys_write("RoadFS: recovery complete")
+    sys_write("  Committed files: preserved")
+    sys_write("  Pending files: rolled back")

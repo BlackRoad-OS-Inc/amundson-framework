@@ -1,0 +1,122 @@
+# BlackRoad OS — Memory Manager
+# Page-based allocation with ternary page states
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module kernel.memory
+
+# ── Page States (trinary) ──
+# -1 = FREED (returned to pool, available)
+#  0 = RESERVED (claimed but not yet written — superposition)
+# +1 = ACTIVE (in use, has data)
+
+let FREED: int = -1
+let RESERVED: int = 0
+let ACTIVE: int = 1
+
+type Page:
+    let id: int
+    let state: int      # trit
+    let owner: int      # pid that owns this page (0 = kernel)
+    let data: list      # page contents
+
+type MemoryManager:
+    let pages: list         # all pages
+    let page_size: int
+    let total_pages: int
+    let free_count: int
+    let active_count: int
+    let reserved_count: int
+
+# ── Initialize ──
+
+fun init(page_size: int) -> MemoryManager:
+    # Start with 256 pages (1MB at 4096 bytes/page)
+    let total: int = 256
+    var pages: list = []
+    var i: int = 0
+    while i < total:
+        let p: Page = Page:
+            id: i
+            state: FREED    # all start freed
+            owner: 0
+            data: []
+        pages = pages + [p]
+        i = i + 1
+
+    return MemoryManager:
+        pages: pages
+        page_size: page_size
+        total_pages: total
+        free_count: total
+        active_count: 0
+        reserved_count: 0
+
+# ── Allocate Pages ──
+
+fun alloc(mem: MemoryManager, count: int, owner: int) -> list:
+    if count > mem.free_count:
+        return []  # out of memory
+
+    var allocated: list = []
+    var found: int = 0
+
+    for page in mem.pages:
+        if found >= count:
+            break
+        if page.state == FREED:
+            page.state = RESERVED   # superposition: claimed but not written
+            page.owner = owner
+            allocated = allocated + [page.id]
+            found = found + 1
+
+    mem.free_count = mem.free_count - found
+    mem.reserved_count = mem.reserved_count + found
+    return allocated
+
+# ── Commit Pages (reserved -> active) ──
+
+fun commit(mem: MemoryManager, page_ids: list):
+    for pid in page_ids:
+        let page: Page = mem.pages[pid]
+        if page.state == RESERVED:
+            page.state = ACTIVE     # superposition collapses to active
+            mem.reserved_count = mem.reserved_count - 1
+            mem.active_count = mem.active_count + 1
+
+# ── Free Pages ──
+
+fun free(mem: MemoryManager, page_ids: list):
+    for pid in page_ids:
+        let page: Page = mem.pages[pid]
+        if page.state != FREED:
+            let was_active: bool = page.state == ACTIVE
+            page.state = FREED
+            page.owner = 0
+            page.data = []
+            mem.free_count = mem.free_count + 1
+            if was_active:
+                mem.active_count = mem.active_count - 1
+            else:
+                mem.reserved_count = mem.reserved_count - 1
+
+# ── Read/Write ──
+
+fun write_page(mem: MemoryManager, page_id: int, data: list):
+    let page: Page = mem.pages[page_id]
+    if page.state == RESERVED:
+        commit(mem, [page_id])
+    page.data = data
+
+fun read_page(mem: MemoryManager, page_id: int) -> list:
+    let page: Page = mem.pages[page_id]
+    if page.state == FREED:
+        return []  # reading freed memory returns nothing
+    return page.data
+
+# ── Stats ──
+
+fun stats(mem: MemoryManager) -> string:
+    let total: int = mem.total_pages
+    let used: int = mem.active_count + mem.reserved_count
+    let efficiency: float = used / total
+    return "Memory: {used}/{total} pages ({mem.active_count} active, {mem.reserved_count} reserved, {mem.free_count} free)"

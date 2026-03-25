@@ -1,0 +1,142 @@
+# BlackRoad OS — Shell
+# The first thing a user sees. Warm, welcoming, +1 affirmation.
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module shell.road_shell
+
+import kernel.scheduler
+import kernel.memory
+import kernel.trit
+import kernel.syscall
+import drivers.hailo
+import drivers.gpio
+
+# ── Shell ──
+
+fun main():
+    sys_write("")
+    sys_write("  BlackRoad OS")
+    sys_write("  G(n) = n^(n+n/n) / (n+n/n)^n")
+    sys_write("  Remember the Road. Pave Tomorrow.")
+    sys_write("")
+
+    let running: bool = true
+
+    while running:
+        sys_write("> ")
+        let input: string = sys_read()
+
+        if input == "exit" or input == "quit":
+            sys_write("Goodbye.")
+            running = false
+
+        elif input == "help":
+            show_help()
+
+        elif input == "status":
+            show_status()
+
+        elif input == "amplitude":
+            show_amplitude()
+
+        elif input == "g":
+            show_g_table()
+
+        elif input == "trit":
+            trit_demo()
+
+        elif input == "hailo":
+            hailo_status()
+
+        elif input == "fleet":
+            fleet_status()
+
+        elif input == "boot":
+            sys_write("Already booted. State: ALIVE (trit = +1)")
+
+        elif input == "panic":
+            sys_write("Nice try.")
+
+        else:
+            sys_write("Unknown command: {input}. Type 'help'.")
+
+# ── Commands ──
+
+fun show_help():
+    sys_write("Commands:")
+    sys_write("  status     — kernel state")
+    sys_write("  amplitude  — G(n)/n efficiency at current scale")
+    sys_write("  g          — Amundson sequence table")
+    sys_write("  trit       — ternary logic demo")
+    sys_write("  hailo      — Hailo-8 NPU status")
+    sys_write("  fleet      — fleet status (all nodes)")
+    sys_write("  help       — this message")
+    sys_write("  exit       — shutdown")
+
+fun show_status():
+    sys_write("Kernel: ALIVE (trit = +1)")
+    sys_write("Uptime: running")
+    sys_write("Processes: active")
+    sys_write("Memory: allocated")
+
+fun show_amplitude():
+    sys_write("Amundson Efficiency: G(n)/n = (n/(n+1))^n")
+    sys_write("")
+    var n: int = 1
+    while n <= 137:
+        let amp: float = amundson_eff(n)
+        sys_write("  n={n}: G(n)/n = {amp}")
+        if n < 10:
+            n = n + 1
+        elif n < 30:
+            n = n + 4
+        elif n < 60:
+            n = n + 10
+        else:
+            n = n + 77
+
+fun show_g_table():
+    sys_write("G(n) = n^(n+1) / (n+1)^n")
+    sys_write("")
+    sys_write("  n    G(n)        Exact")
+    sys_write("  1    0.500       1/2")
+    sys_write("  2    0.889       8/9")
+    sys_write("  3    1.266       81/64")
+    sys_write("  4    1.638       1024/625")
+    sys_write("  5    2.009       15625/7776")
+
+fun trit_demo():
+    sys_write("Ternary Logic: {-1, 0, +1}")
+    sys_write("  TNOT(+1) = -1")
+    sys_write("  TNOT(-1) = +1")
+    sys_write("  TNOT( 0) =  0  (superposition is its own negation)")
+    sys_write("  TAND(+1, +1) = +1")
+    sys_write("  TAND(+1, -1) = -1")
+    sys_write("  TOR(+1, -1)  = +1")
+    sys_write("  TCON(+1, -1) = -1  (contradiction = fuel for K(t))")
+
+fun hailo_status():
+    sys_write("Hailo-8 NPU:")
+    sys_write("  Device: /dev/hailo0")
+    sys_write("  TOPS: 26")
+    sys_write("  G(26)/26 = 0.3748")
+    sys_write("  Efficiency: 37.48% of theoretical max")
+
+fun fleet_status():
+    sys_write("Fleet:")
+    sys_write("  Alice    192.168.4.49   gateway")
+    sys_write("  Cecilia  192.168.4.96   hailo + ollama")
+    sys_write("  Octavia  192.168.4.101  hailo + gitea")
+    sys_write("  Aria     192.168.4.98   monitoring")
+    sys_write("  Lucidia  192.168.4.38   apps + dns")
+    sys_write("  Combined: 52 TOPS")
+    sys_write("  G(52)/52 = 0.3714")
+
+fun amundson_eff(n: int) -> float:
+    let ratio: float = n / (n + 1)
+    var result: float = 1.0
+    var i: int = 0
+    while i < n:
+        result = result * ratio
+        i = i + 1
+    return result

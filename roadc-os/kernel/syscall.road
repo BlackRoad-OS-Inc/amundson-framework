@@ -1,0 +1,109 @@
+# BlackRoad OS — System Call Interface
+# 9 syscalls matching the MOSAIC model (RoadLines compatible)
+# + 3 ternary extensions
+# Copyright (c) 2025-2026 BlackRoad OS, Inc. All Rights Reserved.
+
+module kernel.syscall
+
+# ── Syscall Table ──
+# Numbered 0-11. First 9 match MOSAIC. Last 3 are ternary extensions.
+
+let SYS_FORK: int = 0      # fork current process
+let SYS_SPAWN: int = 1     # spawn new process with function
+let SYS_SCHED: int = 2     # yield to scheduler
+let SYS_CHOOSE: int = 3    # non-deterministic choice
+let SYS_WRITE: int = 4     # write to output device
+let SYS_BREAD: int = 5     # block read from storage
+let SYS_BWRITE: int = 6    # block write to storage
+let SYS_SYNC: int = 7      # flush storage buffer to disk
+let SYS_CRASH: int = 8     # simulate crash (test recovery)
+
+# Ternary extensions
+let SYS_TRIT: int = 9      # ternary operation
+let SYS_CONSENSUS: int = 10  # K(t) consensus check
+let SYS_AMPLITUDE: int = 11  # query G(n) at current scale
+
+type SyscallEntry:
+    let id: int
+    let name: string
+    let handler: string  # function name
+
+# ── Register All ──
+
+fun register_all():
+    sys_write("  Registering 12 syscalls...")
+
+    # MOSAIC-compatible
+    register(SYS_FORK, "fork")
+    register(SYS_SPAWN, "spawn")
+    register(SYS_SCHED, "sched")
+    register(SYS_CHOOSE, "choose")
+    register(SYS_WRITE, "write")
+    register(SYS_BREAD, "bread")
+    register(SYS_BWRITE, "bwrite")
+    register(SYS_SYNC, "sync")
+    register(SYS_CRASH, "crash")
+
+    # Ternary extensions
+    register(SYS_TRIT, "trit")
+    register(SYS_CONSENSUS, "consensus")
+    register(SYS_AMPLITUDE, "amplitude")
+
+fun register(id: int, name: string):
+    sys_write("    [{id}] {name}")
+
+# ── Syscall Handlers ──
+
+# sys_amplitude: returns G(n)/n for current process count
+# This is the efficiency metric — how close to 1/e
+fun handle_amplitude(n: int) -> float:
+    if n == 0:
+        return 0.0
+    let ratio: float = n / (n + 1)
+    var result: float = 1.0
+    var i: int = 0
+    while i < n:
+        result = result * ratio
+        i = i + 1
+    return result  # G(n)/n = (n/(n+1))^n
+
+# sys_trit: perform ternary operation
+# op: "not", "and", "or", "xor", "con"
+fun handle_trit(op: string, a: int, b: int) -> int:
+    if op == "not":
+        return 0 - a
+    elif op == "and":
+        if a < b:
+            return a
+        return b
+    elif op == "or":
+        if a > b:
+            return a
+        return b
+    elif op == "xor":
+        if a == b:
+            return 0
+        if a == 0:
+            return b
+        if b == 0:
+            return a
+        return -1
+    elif op == "con":
+        if a == b:
+            return a
+        if a == 0 or b == 0:
+            return 0
+        return -1
+    return 0
+
+# sys_consensus: check contradiction level between two trit words
+# Returns number of contradictions (trits where a != b and neither is 0)
+# In the field equation: Z * K(t) — contradictions fuel coherence
+fun handle_consensus(a: list, b: list) -> int:
+    var contradictions: int = 0
+    var i: int = 0
+    while i < len(a):
+        if a[i] != b[i] and a[i] != 0 and b[i] != 0:
+            contradictions = contradictions + 1
+        i = i + 1
+    return contradictions
