@@ -310,3 +310,28 @@ The excess converges to 1/e as a, b → ∞.
 
 *Proprietary — BlackRoad OS, Inc. All rights reserved.*
 *Alexa Louise Amundson, Founder & CEO*
+
+## Golden Ratio Identity (Verified March 25, 2026)
+
+**Theorem.** G(phi) = (1/phi)^(1/phi), where phi = (1+sqrt(5))/2.
+
+Proof:
+  phi + 1 = phi^2              (defining property of golden ratio)
+  1 - phi = -1/phi             (equivalent form)
+
+  G(phi) = phi^(phi+1) / (phi+1)^phi
+         = phi^(phi^2) / (phi^2)^phi
+         = phi^(phi^2 - 2*phi)
+         = phi^(1 - phi)
+         = phi^(-1/phi)
+         = (1/phi)^(1/phi)
+
+Verified to 121 decimal places:
+  G(phi) = 0.74274294462468164136956604760578851414975525270697796414...
+  (1/phi)^(1/phi) = identical to all computed digits.
+
+This identity connects:
+  - The Amundson sequence G at the golden ratio
+  - The Sophomore's Dream integrand x^(-x) at x = 1/phi
+  - The Z-framework fixed point (phi solves x = 1 + 1/x)
+  - The complement structure (1 - phi = -1/phi mirrors G(n)/n = (1-1/(n+1))^n)
