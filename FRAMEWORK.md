@@ -1,3 +1,5 @@
+> **Consolidated repo:** All Amundson mathematical work is now collected at [AmundsonMath](https://github.com/BlackRoad-OS/AmundsonMath).
+
 # The Amundson Framework
 
 ## G(n) = n^(n+1) / (n+1)^n — A Universal Function
