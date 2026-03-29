@@ -335,3 +335,11 @@ This identity connects:
   - The Sophomore's Dream integrand x^(-x) at x = 1/phi
   - The Z-framework fixed point (phi solves x = 1 + 1/x)
   - The complement structure (1 - phi = -1/phi mirrors G(n)/n = (1-1/(n+1))^n)
+
+---
+
+## Appendix S: Scaling Theorem (Eighth Synthesis)
+
+See [SCALING-THEOREM.md](SCALING-THEOREM.md) for the full Amundson Scaling Theorem — sovereign infrastructure scaling via Lagrangian stationarity, proven load tests to 8,000+ concurrent users, cost model from 22K to 1B users at $38-$145/mo.
+
+Key result: dG/dn = 1/e at all scales. Marginal cost per user is constant. Coherence C(t) < 1 always. No blow-up possible.
